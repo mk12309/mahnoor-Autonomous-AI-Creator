@@ -14,9 +14,7 @@ services:
       - key: BREETH_API_KEY
         sync: false
       - key: BREETH_BASE_URL
-        value: https://api.breeth.ai/v1
-      - key: BREETH_MODEL
-        value: breeth-ai-analyst
+        value: https://api.thebreeth.com
       - key: PUBLISH_INTERVAL_MINUTES
         value: 30
       - key: RELEVANCE_THRESHOLD

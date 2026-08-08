@@ -66,7 +66,7 @@ End with technical hashtags.
 
 ## 3. Breeth Memory Episode Payload Format
 
-Written to Breeth Memory API (`POST /v1/memories`) via `breethMemoryService.writeEpisode()`:
+Written to Breeth Memory API (`POST /v1/episodes`) via `breethMemoryService.writeEpisode()`:
 
 ```json
 {
