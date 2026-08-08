@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: signalforge-ai-backend
+    env: node
+    buildCommand: cd backend && npm install
+    startCommand: node backend/server.js
+    envVars:
+      - key: PORT
+        value: 5000
+      - key: NODE_ENV
+        value: production
+      - key: MONGODB_URI
+        sync: false
+      - key: BREETH_API_KEY
+        sync: false
+      - key: BREETH_BASE_URL
+        value: https://api.breeth.ai/v1
+      - key: BREETH_MODEL
+        value: breeth-ai-analyst
+      - key: PUBLISH_INTERVAL_MINUTES
+        value: 30
+      - key: RELEVANCE_THRESHOLD
+        value: 70

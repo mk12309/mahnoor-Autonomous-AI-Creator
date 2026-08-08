@@ -1,0 +1,27 @@
+{
+  "name": "signalforge-ai",
+  "version": "1.0.0",
+  "description": "Autonomous AI Infrastructure Analyst — Discovers live topics, evaluates technical value, generates structured compute briefs, and publishes autonomously.",
+  "main": "backend/server.js",
+  "scripts": {
+    "start": "node backend/server.js",
+    "server": "cd backend && npm start",
+    "client": "cd client && npm run dev",
+    "build": "cd client && npm run build",
+    "dev": "concurrently \"npm run server\" \"npm run client\"",
+    "install:all": "cd backend && npm install && cd ../client && npm install"
+  },
+  "keywords": [
+    "ai",
+    "autonomous",
+    "breeth-ai",
+    "infrastructure",
+    "signalforge",
+    "hackathon"
+  ],
+  "author": "SignalForge AI Team",
+  "license": "MIT",
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
