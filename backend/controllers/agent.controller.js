@@ -1,13 +1,5 @@
 /**
- * Agent Controller
- *
- * POST /api/agent/init
- *   — Creates persona, runs the full agent cycle synchronously, returns agentId.
- *   — On Vercel serverless, we MUST await the cycle before responding
- *     because background tasks are killed when the response is sent.
- *
- * GET /api/agent/feed?agentId=<id>
- *   — Returns published posts in reverse chronological order.
+ * Agent Controller — Resilient DB Handling
  */
 
 const PersonaConfig = require('../models/PersonaConfig');
@@ -23,33 +15,37 @@ const initAgent = async (req, res, next) => {
   try {
     logger.info('[Agent API] Initializing SignalForge AI Agent...');
 
-    let persona = await PersonaConfig.findOne({ isActive: true });
-    if (!persona) {
-      persona = await PersonaConfig.create({
-        name: 'SignalForge AI',
-        tone: 'professional',
-        style: 'analytical',
-        targetAudience: 'Tech Professionals, CTOs, AI Infrastructure Engineers',
-        postLength: 'medium',
-        focusAreas: ['AI Infrastructure', 'GPU Scaling', 'MLOps', 'LLM Serving'],
-        isActive: true,
-      });
+    let agentId = 'agent-signalforge-default';
+
+    try {
+      let persona = await PersonaConfig.findOne({ isActive: true });
+      if (!persona) {
+        persona = await PersonaConfig.create({
+          name: 'SignalForge AI',
+          tone: 'professional',
+          style: 'analytical',
+          targetAudience: 'Tech Professionals, CTOs, AI Infrastructure Engineers',
+          postLength: 'medium',
+          focusAreas: ['AI Infrastructure', 'GPU Scaling', 'MLOps', 'LLM Serving'],
+          isActive: true,
+        });
+      }
+      if (persona && persona._id) {
+        agentId = `agent-${persona._id}`;
+      }
+    } catch (dbErr) {
+      logger.warn(`[Agent API] DB initialization warning: ${dbErr.message}`);
     }
 
-    const agentId = `agent-${persona._id}`;
-
-    // VERCEL FIX: Run cycle synchronously before responding.
-    // On serverless, background tasks (fire-and-forget) are killed
-    // the moment res.json() is sent, so the cycle would never complete.
-    logger.info('[Agent API] Running initial agent cycle synchronously...');
+    logger.info('[Agent API] Running agent cycle synchronously...');
+    let cycleResult = null;
     try {
-      await runAgentCycle();
+      cycleResult = await runAgentCycle();
     } catch (cycleErr) {
-      // Cycle errors are non-fatal — agent is still initialized
       logger.warn(`[Agent API] Cycle warning: ${cycleErr.message}`);
     }
 
-    res.status(200).json({ agentId });
+    res.status(200).json({ agentId, cycleResult });
   } catch (error) {
     next(error);
   }
@@ -63,16 +59,25 @@ const getAgentFeed = async (req, res, next) => {
     const { agentId } = req.query;
     logger.info(`[Agent API] Fetching feed for agentId: ${agentId || 'default'}`);
 
-    const persona = await PersonaConfig.findOne({ isActive: true });
-    const currentPersona = {
-      name: persona ? persona.name : 'SignalForge AI',
+    let currentPersona = {
+      name: 'SignalForge AI',
       title: 'Autonomous AI Infrastructure Analyst',
       voice: 'Professional, analytical, authoritative, data-backed',
     };
 
-    const posts = await Post.find({ status: 'published' })
-      .sort({ createdAt: -1 })
-      .lean();
+    let posts = [];
+
+    try {
+      const persona = await PersonaConfig.findOne({ isActive: true });
+      if (persona) {
+        currentPersona.name = persona.name;
+      }
+      posts = await Post.find({ status: 'published' })
+        .sort({ createdAt: -1 })
+        .lean();
+    } catch (dbErr) {
+      logger.warn(`[Agent API] DB fetch warning: ${dbErr.message}`);
+    }
 
     const totalPosts = posts ? posts.length : 0;
     const lastPublishedAt =
@@ -100,7 +105,7 @@ const getAgentFeed = async (req, res, next) => {
           : [{ title: 'SignalForge Live Stream', url: 'https://signalforge.ai' }];
 
       return {
-        id: post._id.toString(),
+        id: post._id ? post._id.toString() : `post-${Date.now()}`,
         createdAt: createdAtDate.toISOString(),
         text: post.text || post.content || '',
         rationale: post.rationale || 'Selected based on high AI infrastructure relevance score.',
