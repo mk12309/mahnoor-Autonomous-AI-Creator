@@ -11,22 +11,16 @@
   },
   "rewrites": [
     {
-      "source": "/api/(.*)",
-      "destination": "/api/index"
+      "source": "/health",
+      "destination": "/api/index.js"
     },
     {
-      "source": "/health",
-      "destination": "/api/index"
+      "source": "/api/(.*)",
+      "destination": "/api/index.js"
     },
     {
       "source": "/(.*)",
       "destination": "/index.html"
-    }
-  ],
-  "crons": [
-    {
-      "path": "/api/pipeline/run",
-      "schedule": "0 0 * * *"
     }
   ]
 }
