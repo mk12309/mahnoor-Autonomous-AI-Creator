@@ -15,39 +15,7 @@ app.use(cors({ origin: '*', credentials: true }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Database Connection Middleware — ensures MongoDB is connected for all API routes
-app.use(async (req, res, next) => {
-  if (req.path === '/' || req.path === '/health') {
-    return next();
-  }
-
-  if (mongoose.connection.readyState === 1) {
-    return next();
-  }
-
-  const connectDB = require('./database/db');
-  try {
-    const conn = await connectDB();
-    if (!conn || mongoose.connection.readyState !== 1) {
-      return res.status(503).json({
-        success: false,
-        error: 'MongoDB Atlas Connection Failed',
-        message: 'Backend could not establish a live connection to MongoDB Atlas. Please check MONGODB_URI in Vercel environment variables and ensure MongoDB Atlas Network Access allows 0.0.0.0/0.',
-        envConfigured: Boolean(config.mongoUri && config.mongoUri.length > 10)
-      });
-    }
-    next();
-  } catch (err) {
-    return res.status(503).json({
-      success: false,
-      error: 'MongoDB Atlas Connection Exception',
-      message: err.message,
-      envConfigured: Boolean(config.mongoUri && config.mongoUri.length > 10)
-    });
-  }
-});
-
-// Root Welcome & Status Endpoint
+// Root Welcome Endpoint
 app.get('/', (req, res) => {
   res.status(200).send(`⚡ SignalForge AI Backend API Service Online`);
 });
@@ -74,6 +42,34 @@ app.get('/health', async (req, res) => {
     mongoUriSet: Boolean(config.mongoUri && config.mongoUri.length > 10),
     timestamp: new Date().toISOString()
   });
+});
+
+// Database Connection Middleware — validates MongoDB connection before any API route executes
+app.use(async (req, res, next) => {
+  if (mongoose.connection.readyState === 1) {
+    return next();
+  }
+
+  const connectDB = require('./database/db');
+  try {
+    const conn = await connectDB();
+    if (!conn || mongoose.connection.readyState !== 1) {
+      return res.status(503).json({
+        success: false,
+        error: 'MongoDB Atlas Connection Failed',
+        message: 'Backend could not connect to MongoDB Atlas. Please check MONGODB_URI in Vercel environment variables and ensure MongoDB Atlas Network Access allows 0.0.0.0/0.',
+        envConfigured: Boolean(config.mongoUri && config.mongoUri.length > 10)
+      });
+    }
+    next();
+  } catch (err) {
+    return res.status(503).json({
+      success: false,
+      error: 'MongoDB Atlas Connection Exception',
+      message: err.message,
+      envConfigured: Boolean(config.mongoUri && config.mongoUri.length > 10)
+    });
+  }
 });
 
 app.use('/api', routes);
