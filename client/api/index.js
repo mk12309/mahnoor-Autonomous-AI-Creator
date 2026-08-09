@@ -1,10 +1,7 @@
 /**
  * client/api/index.js — Vercel Serverless Entry Point for SignalForge AI Backend
- *
- * Explicit top-level requires guarantee Vercel NFT bundler includes all modules.
  */
 
-// Top-level explicit requires for Vercel NFT File Tracer
 require('express');
 require('mongoose');
 require('axios');
@@ -25,17 +22,10 @@ try {
   console.error('[Serverless Require Error]:', err.message);
 }
 
-let connectionPromise = null;
-
 const ensureConnected = async () => {
   if (initError) throw initError;
   if (!connectDB) return;
-  if (connectionPromise) return connectionPromise;
-  connectionPromise = connectDB().catch((err) => {
-    console.error('[Serverless DB Error]:', err.message);
-    connectionPromise = null;
-  });
-  return connectionPromise;
+  await connectDB();
 };
 
 module.exports = async (req, res) => {
