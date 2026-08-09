@@ -1,7 +1,5 @@
 /**
  * Database Connection Setup — Serverless-Compatible
- *
- * Caches the Mongoose connection across warm Vercel invocations.
  */
 
 const mongoose = require('mongoose');
@@ -15,38 +13,38 @@ const connectDB = async () => {
     return cached.conn;
   }
 
-  if (cached.promise) {
-    cached.conn = await cached.promise;
-    return cached.conn;
-  }
-
   const uri = config.mongoUri;
-  if (!uri) {
-    logger.error('[Database] MONGODB_URI is not set in environment variables.');
-    return null;
+  if (!uri || uri.includes('your_mongodb_atlas_connection_string')) {
+    const msg = '[Database] MONGODB_URI is not configured in Vercel environment variables.';
+    logger.error(msg);
+    throw new Error(msg);
   }
 
-  logger.info('[Database] Opening new MongoDB Atlas connection...');
+  if (cached.promise) {
+    try {
+      cached.conn = await cached.promise;
+      return cached.conn;
+    } catch (e) {
+      cached = { conn: null, promise: null };
+      throw e;
+    }
+  }
+
+  logger.info('[Database] Connecting to MongoDB Atlas...');
 
   cached.promise = mongoose.connect(uri, {
-    serverSelectionTimeoutMS: 5000,
+    serverSelectionTimeoutMS: 8000,
     socketTimeoutMS: 45000,
   });
 
   try {
     cached.conn = await cached.promise;
     logger.info(`[Database] ✅ MongoDB Connected: ${cached.conn.connection.host}`);
-
-    mongoose.connection.on('error', (err) => {
-      logger.error(`[Database] Connection Error: ${err.message}`);
-      cached = { conn: null, promise: null };
-    });
-
     return cached.conn;
   } catch (error) {
     cached = { conn: null, promise: null };
     logger.error(`[Database] ❌ Connection failed: ${error.message}`);
-    return null;
+    throw new Error(`MongoDB Connection Failed: ${error.message}`);
   }
 };
 
