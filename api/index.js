@@ -1,6 +1,17 @@
 /**
  * api/index.js — Vercel Serverless Entry Point for SignalForge AI Backend
+ *
+ * Explicit top-level requires guarantee Vercel NFT bundler includes all modules.
  */
+
+// Top-level explicit requires for Vercel NFT File Tracer
+require('express');
+require('mongoose');
+require('axios');
+require('cors');
+require('dotenv');
+require('rss-parser');
+require('node-cron');
 
 let connectDB;
 let app;
