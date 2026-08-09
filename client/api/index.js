@@ -7,8 +7,8 @@ let app;
 let initError = null;
 
 try {
-  connectDB = require('../../backend/database/db');
-  app = require('../../backend/app');
+  connectDB = require('../backend/database/db');
+  app = require('../backend/app');
 } catch (err) {
   initError = err;
   console.error('[Serverless Require Error]:', err.message);
