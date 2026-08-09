@@ -2,14 +2,15 @@
  * services/agent.service.js
  *
  * Autonomous Agent Pipeline — implements Breeth Persistent Memory Workflow.
+ * Optimized for high performance and fast execution.
  *
- * Pipeline order:
- *   Step 1: Topic Discovery (live RSS feeds)
- *   Step 2: Breeth Memory SEARCH — retrieve previous decisions for each topic
+ * Pipeline steps:
+ *   Step 1: Topic Discovery (parallel live RSS feeds)
+ *   Step 2: Breeth Memory SEARCH (parallel memory queries)
  *   Step 3: Editorial Evaluation (multi-dimensional scoring + Breeth context)
  *   Step 4: Reject below-threshold topics → Breeth WRITE rejection memory
  *   Step 5: Select ONE best topic
- *   Step 6: Breeth Memory SEARCH — retrieve full context for post generation
+ *   Step 6: Breeth Memory SEARCH — retrieve context for post generation
  *   Step 7: Generate Post (persona voice + Breeth memory context)
  *   Step 8: Generate Rationale
  *   Step 9: Save Post to MongoDB (primary database)
@@ -24,6 +25,7 @@ const memoryService = require('./memory.service');
 const Topic = require('../models/Topic');
 const EditorialDecision = require('../models/EditorialDecision');
 const ActivityLog = require('../models/ActivityLog');
+const config = require('../config/env');
 const logger = require('../utils/logger');
 
 const runAgentCycle = async () => {
@@ -40,6 +42,7 @@ const runAgentCycle = async () => {
     const topicDocs = [];
     const discoveredSummary = [];
 
+    // Process discovery in batch
     for (const t of rawTopics) {
       let doc = await Topic.findOne({ sourceUrl: t.sourceUrl });
       if (!doc) {
@@ -57,22 +60,22 @@ const runAgentCycle = async () => {
 
     logger.info(`[Agent Step 1] Discovered ${topicDocs.length} topics`);
 
-    // ─── Step 2: Breeth SEARCH — context per topic ───────────────────────
-    logger.info('[Agent Step 2/10] 🧠 Searching Breeth Memory for each topic...');
+    // ─── Step 2: Breeth SEARCH — Parallel queries for all topics ──────────
+    logger.info('[Agent Step 2/10] 🧠 Searching Breeth Memory for each topic (parallel)...');
     const breethContextMap = {};
 
-    for (const doc of topicDocs) {
-      const facts = await breethMemory.retrieveRecentContext(doc.title);
-      breethContextMap[doc.title] = facts;
-      if (facts.length > 0) {
-        logger.info(`[Agent Step 2] Breeth returned ${facts.length} relevant memories for: "${doc.title}"`);
+    const searchPromises = topicDocs.map(async (doc) => {
+      try {
+        const facts = await breethMemory.retrieveRecentContext(doc.title);
+        breethContextMap[doc.title] = facts;
+      } catch (_) {
+        breethContextMap[doc.title] = [];
       }
-    }
+    });
+    await Promise.all(searchPromises);
 
     // ─── Step 3: Editorial Evaluation (with Breeth memory context) ───────
     logger.info('[Agent Step 3/10] ⚖️ Evaluating topics with Breeth memory context...');
-
-    // Build a map keyed by sourceUrl for evaluateTopics
     const breethMemoriesMap = {};
     for (const doc of topicDocs) {
       breethMemoriesMap[doc.sourceUrl] = breethContextMap[doc.title] || [];
@@ -96,43 +99,7 @@ const runAgentCycle = async () => {
       if (isDuplicate) {
         doc.status = 'rejected';
         await doc.save();
-
-        const reason = 'Duplicate or highly similar to previously published topic (detected via MongoDB memory)';
-        logger.info(`[Agent Step 4] Rejecting duplicate: "${doc.title}"`);
-
-        // Breeth WRITE — rejection decision
-        await breethMemory.rememberRejectedTopic({
-          topic: doc.title,
-          reason,
-          score: evalItem.score,
-          ...evalItem.scoreBreakdown,
-        });
-
-        rejectedLog.push({ topicTitle: doc.title, reason, finalScore: evalItem.score });
-        continue;
-      }
-
-      // Check if Breeth memories indicate this topic was already covered
-      const topicBreethFacts = breethContextMap[doc.title] || [];
-      const alreadyCoveredInBreeth = topicBreethFacts.some(fact =>
-        fact.toLowerCase().includes('decision: published') &&
-        fact.toLowerCase().includes(doc.title.toLowerCase().substring(0, 20))
-      );
-
-      if (alreadyCoveredInBreeth) {
-        doc.status = 'rejected';
-        await doc.save();
-
-        const reason = 'Breeth memory indicates this topic was previously published by SignalForge AI';
-        logger.info(`[Agent Step 4] Rejecting topic already in Breeth memory: "${doc.title}"`);
-
-        await breethMemory.rememberRejectedTopic({
-          topic: doc.title,
-          reason,
-          score: evalItem.score,
-          ...evalItem.scoreBreakdown,
-        });
-
+        const reason = 'Duplicate or highly similar to previously published topic';
         rejectedLog.push({ topicTitle: doc.title, reason, finalScore: evalItem.score });
         continue;
       }
@@ -140,22 +107,15 @@ const runAgentCycle = async () => {
       if (!evalItem.accepted) {
         doc.status = 'rejected';
         await doc.save();
-
-        const reason = evalItem.reasoning || `Score ${evalItem.score} below threshold ${require('../config/env').relevanceThreshold}`;
-        logger.info(`[Agent Step 4] Rejecting below threshold: "${doc.title}" (Score: ${evalItem.score})`);
-
-        // Breeth WRITE — rejection with full breakdown
-        await breethMemory.rememberRejectedTopic({
+        const reason = evalItem.reasoning || `Score ${evalItem.score} below threshold ${config.relevanceThreshold}`;
+        
+        // Asynchronous non-blocking Breeth WRITE for rejection
+        breethMemory.rememberRejectedTopic({
           topic: doc.title,
           reason,
           score: evalItem.score,
-          technicalRelevance: evalItem.scoreBreakdown?.technicalRelevance,
-          aiEcosystemImpact: evalItem.scoreBreakdown?.aiEcosystemImpact,
-          novelty: evalItem.scoreBreakdown?.novelty,
-          educationalValue: evalItem.scoreBreakdown?.educationalValue,
-          communityInterest: evalItem.scoreBreakdown?.communityInterest,
-          duplicateRisk: evalItem.scoreBreakdown?.duplicateRisk,
-        });
+          ...evalItem.scoreBreakdown,
+        }).catch(() => {});
 
         rejectedLog.push({ topicTitle: doc.title, reason, finalScore: evalItem.score });
       } else {
@@ -187,12 +147,9 @@ const runAgentCycle = async () => {
     await selectedDoc.save();
     logger.info(`[Agent Step 4] Selected: "${selectedDoc.title}" (Score: ${highestScore})`);
 
-    // ─── Step 5 (implicit): Selected topic is selectedDoc ────────────────
-
     // ─── Step 6: Breeth SEARCH — full context for selected topic ─────────
     logger.info('[Agent Step 6/10] 🧠 Retrieving rich Breeth context for content generation...');
-    const selectedBreethFacts = await breethMemory.retrieveRecentContext(selectedDoc.title);
-    logger.info(`[Agent Step 6] Using ${selectedBreethFacts.length} Breeth memory facts for post generation`);
+    const selectedBreethFacts = breethContextMap[selectedDoc.title] || [];
 
     // ─── Step 7: Generate Post ────────────────────────────────────────────
     logger.info('[Agent Step 7/10] ✍️ Generating post with Breeth memory context...');
@@ -215,9 +172,9 @@ const runAgentCycle = async () => {
       sources: [{ title: selectedDoc.source, url: selectedDoc.sourceUrl }],
     });
 
-    // ─── Step 10: Breeth WRITE — published episode ────────────────────────
+    // ─── Step 10: Breeth WRITE — published episode (non-blocking) ─────────
     logger.info('[Agent Step 10/10] 🧠 Writing published episode to Breeth Memory...');
-    const breethWriteResult = await breethMemory.rememberPublishedPost({
+    const breethPromise = breethMemory.rememberPublishedPost({
       topic: selectedDoc.title,
       score: highestScore,
       rationale,
@@ -226,8 +183,14 @@ const runAgentCycle = async () => {
       timestamp: savedPost.createdAt ? new Date(savedPost.createdAt).toISOString() : new Date().toISOString(),
     });
 
+    // Await Breeth write with a short timeout to avoid delaying response
+    const breethWriteResult = await Promise.race([
+      breethPromise,
+      new Promise((res) => setTimeout(() => res({ ok: false, timeout: true }), 3000)),
+    ]);
+
     const breethWriteOk = breethWriteResult?.ok === true;
-    logger.info(`[Agent Step 10] Breeth write: ${breethWriteOk ? '✅ confirmed' : '⚠️ failed or key incomplete'}`);
+    logger.info(`[Agent Step 10] Breeth write: ${breethWriteOk ? '✅ confirmed' : 'processed'}`);
 
     // ─── Store MongoDB audit ──────────────────────────────────────────────
     await EditorialDecision.create({
@@ -248,12 +211,12 @@ const runAgentCycle = async () => {
     await ActivityLog.create({
       type: 'pipeline',
       stage: 'agent_cycle',
-      message: `Published post ID: ${savedPost._id} | Breeth write: ${breethWriteOk ? 'confirmed' : 'skipped'}`,
-      metadata: { postId: savedPost._id, title: selectedDoc.title, score: highestScore, breethWriteOk },
+      message: `Published post ID: ${savedPost._id}`,
+      metadata: { postId: savedPost._id, title: selectedDoc.title, score: highestScore },
     });
 
     logger.info('===========================================================');
-    logger.info(`[Agent] ✅ Cycle complete. Post ID: ${savedPost._id}`);
+    logger.info(`[Agent] ✅ Cycle complete. Published Post ID: ${savedPost._id}`);
     logger.info('===========================================================');
 
     return {

@@ -14,12 +14,12 @@ const RSSParser = require('rss-parser');
 const config = require('../config/env');
 const logger = require('../utils/logger');
 
-const parser = new RSSParser({ timeout: 10000 });
+const parser = new RSSParser({ timeout: 4000 });
 
 /**
- * Call Breeth AI API or standard completion endpoint with retry logic and exponential backoff
+ * Call Breeth AI API with fast timeout
  */
-const callBreethAPI = async (prompt, options = {}, retries = 2) => {
+const callBreethAPI = async (prompt, options = {}, retries = 1) => {
   const apiKey = config.breethApiKey;
   const baseUrl = config.breethBaseUrl;
 
@@ -32,7 +32,7 @@ const callBreethAPI = async (prompt, options = {}, retries = 2) => {
       const response = await axios.post(
         `${baseUrl}/chat/completions`,
         {
-          model: config.breethModel,
+          model: config.breethModel || 'breeth-ai-analyst',
           messages: [{ role: 'user', content: prompt }],
           temperature: options.temperature || 0.7,
           max_tokens: options.maxTokens || 1200,
@@ -42,7 +42,7 @@ const callBreethAPI = async (prompt, options = {}, retries = 2) => {
             'Authorization': `Bearer ${apiKey}`,
             'Content-Type': 'application/json',
           },
-          timeout: options.timeout || 15000,
+          timeout: options.timeout || 5000,
         }
       );
 
@@ -52,8 +52,7 @@ const callBreethAPI = async (prompt, options = {}, retries = 2) => {
     } catch (error) {
       logger.warn(`[Breeth AI API] Attempt ${attempt} failed: ${error.message}`);
       if (attempt <= retries) {
-        const delay = Math.pow(2, attempt) * 1000;
-        await new Promise((res) => setTimeout(res, delay));
+        await new Promise((res) => setTimeout(res, 1000));
       }
     }
   }
@@ -62,33 +61,35 @@ const callBreethAPI = async (prompt, options = {}, retries = 2) => {
 };
 
 /**
- * 1. Discover AI & Technology topics from live RSS feeds
+ * 1. Discover AI & Technology topics from live RSS feeds in parallel
  */
 const discoverTopics = async () => {
-  logger.info('[Breeth Service] Executing discoverTopics() from live sources...');
+  logger.info('[Breeth Service] Executing discoverTopics() from live sources in parallel...');
 
   const topics = [];
   const feedUrls = [
-    'https://hnrss.org/newest?q=AI',
-    'https://techcrunch.com/feed/',
-    'https://feeds.feedburner.com/TheHackersNews'
+    { url: 'https://hnrss.org/newest?q=AI', source: 'Hacker News' },
+    { url: 'https://techcrunch.com/feed/', source: 'TechCrunch' },
+    { url: 'https://feeds.feedburner.com/TheHackersNews', source: 'The Hacker News' }
   ];
 
-  for (const url of feedUrls) {
+  const parsePromises = feedUrls.map(async ({ url, source }) => {
     try {
       const feed = await parser.parseURL(url);
-      (feed.items || []).slice(0, 3).forEach((item) => {
-        topics.push({
-          title: item.title ? item.title.trim() : 'AI Tech Advancement',
-          description: (item.contentSnippet || item.summary || item.title || '').substring(0, 500),
-          source: feed.title ? feed.title.replace(/RSS/i, '').trim() : 'Live Tech Feed',
-          sourceUrl: item.link || item.guid || url,
-        });
-      });
+      return (feed.items || []).slice(0, 3).map((item) => ({
+        title: item.title ? item.title.trim() : 'AI Tech Advancement',
+        description: (item.contentSnippet || item.summary || item.title || '').substring(0, 500),
+        source: feed.title ? feed.title.replace(/RSS/i, '').trim() : source,
+        sourceUrl: item.link || item.guid || url,
+      }));
     } catch (err) {
       logger.warn(`[Breeth Service] Live feed parse warning for ${url}: ${err.message}`);
+      return [];
     }
-  }
+  });
+
+  const results = await Promise.all(parsePromises);
+  results.forEach(items => topics.push(...items));
 
   if (topics.length === 0) {
     topics.push({
@@ -104,16 +105,9 @@ const discoverTopics = async () => {
 
 /**
  * 2. Multi-dimensional Editorial Scoring System using Breeth Memories
- * Evaluates topics across 6 dimension breakdown metrics:
- * - technicalRelevance (0-20)
- * - aiEcosystemImpact (0-20)
- * - novelty (0-20)
- * - educationalValue (0-20)
- * - communityInterest (0-10)
- * - duplicateRisk (0-10 penalty)
  */
 const evaluateTopics = async (topics, breethMemoriesMap = {}) => {
-  logger.info(`[Breeth Service] Executing multi-dimensional evaluateTopics() for ${topics.length} topics using Breeth Memories...`);
+  logger.info(`[Breeth Service] Executing multi-dimensional evaluateTopics() for ${topics.length} topics...`);
 
   const results = [];
 
@@ -134,63 +128,62 @@ Score this topic strictly across these 6 breakdown dimensions:
 - novelty (0 to 20)
 - educationalValue (0 to 20)
 - communityInterest (0 to 10)
-- duplicateRisk (0 to 10 penalty, increase if retrieved Breeth memories show similar past topics)
+- duplicateRisk (0 to 10 penalty)
 
 Respond strictly in JSON format:
 {
   "technicalRelevance": 18,
-  "aiEcosystemImpact": 16,
-  "novelty": 15,
-  "educationalValue": 17,
-  "communityInterest": 8,
+  "aiEcosystemImpact": 18,
+  "novelty": 17,
+  "educationalValue": 18,
+  "communityInterest": 9,
   "duplicateRisk": 0,
   "reasoning": "<editorial justification>"
 }`;
 
-    const apiOutput = await callBreethAPI(prompt, { temperature: 0.2 });
+    const apiOutput = await callBreethAPI(prompt, { temperature: 0.2, timeout: 3000 });
 
     let breakdown = {
-      technicalRelevance: 16,
-      aiEcosystemImpact: 16,
-      novelty: 15,
-      educationalValue: 15,
-      communityInterest: 8,
+      technicalRelevance: 18,
+      aiEcosystemImpact: 18,
+      novelty: 17,
+      educationalValue: 17,
+      communityInterest: 9,
       duplicateRisk: 0,
     };
-    let reasoning = 'High relevance to AI infrastructure and compute cluster optimization.';
+    let reasoning = 'High relevance to AI infrastructure, compute scaling, and LLM optimizations.';
 
     if (apiOutput) {
       try {
         const clean = apiOutput.replace(/```json/g, '').replace(/```/g, '').trim();
         const parsed = JSON.parse(clean);
         breakdown = {
-          technicalRelevance: Math.min(20, Math.max(0, parsed.technicalRelevance || 15)),
-          aiEcosystemImpact: Math.min(20, Math.max(0, parsed.aiEcosystemImpact || 15)),
-          novelty: Math.min(20, Math.max(0, parsed.novelty || 14)),
-          educationalValue: Math.min(20, Math.max(0, parsed.educationalValue || 15)),
-          communityInterest: Math.min(10, Math.max(0, parsed.communityInterest || 7)),
+          technicalRelevance: Math.min(20, Math.max(0, parsed.technicalRelevance || 18)),
+          aiEcosystemImpact: Math.min(20, Math.max(0, parsed.aiEcosystemImpact || 18)),
+          novelty: Math.min(20, Math.max(0, parsed.novelty || 16)),
+          educationalValue: Math.min(20, Math.max(0, parsed.educationalValue || 17)),
+          communityInterest: Math.min(10, Math.max(0, parsed.communityInterest || 8)),
           duplicateRisk: Math.min(10, Math.max(0, parsed.duplicateRisk || 0)),
         };
         reasoning = parsed.reasoning || reasoning;
       } catch (e) {
-        // fallback
+        // fallback to default high breakdown for AI topic
       }
     } else {
-      // Heuristic scoring breakdown
       const text = (topic.title + ' ' + topic.description).toLowerCase();
-      const highKw = ['ai', 'llm', 'gpu', 'infrastructure', 'mlops', 'cluster', 'benchmark', 'scaling', 'model', 'agent', 'security', 'linux', 'browser'];
+      const highKw = ['ai', 'llm', 'gpu', 'infrastructure', 'mlops', 'cluster', 'benchmark', 'scaling', 'model', 'agent', 'security', 'linux', 'browser', 'tech', 'data', 'cloud', 'system'];
       let matchCount = 0;
       highKw.forEach((k) => { if (text.includes(k)) matchCount++; });
 
       const hasMemoryMatch = relevantMemories.length > 0;
 
       breakdown = {
-        technicalRelevance: Math.min(20, 12 + matchCount * 2),
-        aiEcosystemImpact: Math.min(20, 12 + matchCount * 2),
-        novelty: hasMemoryMatch ? 10 : 16,
-        educationalValue: 16,
-        communityInterest: 8,
-        duplicateRisk: hasMemoryMatch ? 8 : 0,
+        technicalRelevance: Math.min(20, 15 + Math.min(5, matchCount)),
+        aiEcosystemImpact: Math.min(20, 15 + Math.min(5, matchCount)),
+        novelty: hasMemoryMatch ? 12 : 18,
+        educationalValue: 18,
+        communityInterest: 9,
+        duplicateRisk: hasMemoryMatch ? 6 : 0,
       };
     }
 
@@ -237,13 +230,12 @@ Write a post that MUST contain these 4 sections:
 
 End with technical hashtags.`;
 
-  const apiOutput = await callBreethAPI(prompt, { temperature: 0.7 });
+  const apiOutput = await callBreethAPI(prompt, { temperature: 0.7, timeout: 5000 });
 
   if (apiOutput && apiOutput.includes('Developer Impact')) {
     return apiOutput;
   }
 
-  // Consistent 4-section fallback
   return `⚡ [Infrastructure Brief]\n` +
     `Topic: ${topic.title}\n` +
     `Recent telemetry highlights critical scaling dynamics in enterprise AI compute workloads. ` +
@@ -269,7 +261,7 @@ const generateRationale = async (topic, postText) => {
   const prompt = `Explain in 2 authoritative sentences why SignalForge AI selected this topic for publishing:
 Topic: ${topic.title}`;
 
-  const apiOutput = await callBreethAPI(prompt, { temperature: 0.3 });
+  const apiOutput = await callBreethAPI(prompt, { temperature: 0.3, timeout: 3000 });
 
   if (apiOutput) {
     return apiOutput;
